@@ -2,7 +2,7 @@ package wikipedia
 
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.SparkContext._
-import org.apache.spark.rdd.RDD
+import org.apache.spark.rdd.{PairRDDFunctions, RDD}
 
 case class WikipediaArticle(title: String, text: String)
 
@@ -49,25 +49,11 @@ object WikipediaRanking {
    * to the Wikipedia pages in which it occurs.
    */
   def makeIndex(langs: List[String], rdd: RDD[WikipediaArticle]): RDD[(String, Iterable[WikipediaArticle])] = {
-    var tuple: Tuple2[String, List[WikipediaArticle]] = Tuple2.empty
-    rdd foreach {
-      article =>
-        langs.foreach {
-          lang =>
-            if(article.text.contains(lang)) {
-              if(tuple.contains(lang))
-                tuple += (lang -> tuple(lang) :+ article)
-              else
-                tuple += (lang -> List(article))
-            }
-
-        }
-    }
-    sc.parallelize(tuple)
-
-    // for each article
-    // check all languages in it, create tuple2(lang, addtoexistingList)
-    // parallelize
+    {for {
+      article <- rdd
+      lang <- langs
+      if(article.text.split(" ").contains(lang))
+    } yield (lang, article) }.groupByKey
   }
 
   /* (2) Compute the language ranking again, but now using the inverted index. Can you notice
@@ -77,7 +63,7 @@ object WikipediaRanking {
    *   several seconds.
    */
   def rankLangsUsingIndex(index: RDD[(String, Iterable[WikipediaArticle])]): List[(String, Int)] = {
-    (index map { ind => (ind._1, occurrencesOfLang(ind._1, sc.parallelize(ind._2)) }).collect().toList
+    index.mapValues(articles => articles.size).collect.sortWith((a, b) => a._2 > b._2).toList
   }
 
   /* (3) Use `reduceByKey` so that the computation of the index and the ranking are combined.
@@ -87,7 +73,13 @@ object WikipediaRanking {
    *   Note: this operation is long-running. It can potentially run for
    *   several seconds.
    */
-  def rankLangsReduceByKey(langs: List[String], rdd: RDD[WikipediaArticle]): List[(String, Int)] = ???
+  def rankLangsReduceByKey(langs: List[String], rdd: RDD[WikipediaArticle]): List[(String, Int)] = {
+    ({ for {
+      article <- rdd
+      lang <- langs
+      if(article.text.split(" ").contains(lang))
+    } yield (lang, 1) }.reduceByKey(_ + _).collect.sortWith( (a, b) => a._2 > b._2 )).toList
+  }
 
   def main(args: Array[String]) {
 
